@@ -82,4 +82,7 @@ If you encounter a `configuration error` stating `default.conf` is missing, ensu
 ## Must-have extensions for VSCode/Cursor
 <img src='./images/Extensions.png' alt="VS Code Extensions List" width="300" />
 
+## COBOL Program Structure
+<img src='./images/program_structure.jpg' alt="VS Code Extensions List" width="400" />
+
 ---
