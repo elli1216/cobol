@@ -34,7 +34,7 @@
 
 **Sample FB Definition:**
 ```cobol
-       SELECT FB-FILE ASSIGN TO 'FBDATA'
+       SELECT FB-FILE ASSIGN TO FBDATA
            ORGANIZATION IS SEQUENTIAL
            FILE STATUS  IS WS-FB-STATUS.
        ...
@@ -48,7 +48,7 @@
 
 **Sample VB Definition:**
 ```cobol
-       SELECT VB-FILE ASSIGN TO 'VBDATA'
+       SELECT VB-FILE ASSIGN TO VBDATA
            ORGANIZATION IS SEQUENTIAL
            FILE STATUS  IS WS-VB-STATUS.
        ...
@@ -63,7 +63,7 @@
 
 **Sample VSAM Definition:**
 ```cobol
-       SELECT VSAM-FILE ASSIGN TO 'VSAMDATA'
+       SELECT VSAM-FILE ASSIGN TO VSAMDATA
            ORGANIZATION IS INDEXED
            ACCESS MODE  IS RANDOM/DYNAMIC *> depends on logic
            RECORD KEY   IS VSAM-KEY
@@ -80,30 +80,34 @@
 
 
 3. **Program Structure:**
-* Use a structured flow: `0000-MAIN`  `1000-INITIALIZATION`  `2000-PROCESS`  `9000-TERMINATION`.
+* Use a structured flow: `0000-MAIN`  `0100-INITIALIZATION`  `0200-PROCESS`  `0900-TERMINATION`.
+* **MANDATORY:** If possible, the `0100-INITIALIZATION` paragraph should only contain `PERFORM` statements calling other specialized paragraphs (e.g., for opening files, lookups, or priming reads) followed by an `EXIT`.
 * Always include `STOP RUN` or `EXIT PROGRAM` at the end of the main logic.
-
 
 4. **Logic Mirroring & Control Flow:**
 * **FORBIDDEN:** Do **NOT** use `EXIT PARAGRAPH`. It causes Mainframe compiler errors.
-* **MANDATORY:** Use the `GO TO [Label]-EXIT` pattern.
-* *Example:*
-```cobol
-IF ERROR-FOUND
-   GO TO 2100-EXIT
-END-IF.
-...
-2100-EXIT.
-   EXIT.
-
-```
+* **MANDATORY:** 
+    * Use this pattern:
+    ```cobol
+    PERFORM 0100-SAMPLE-PARAGRAPH THRU 0100-EXIT.
+    ...
+    0100-EXIT.
+    EXIT.
+    ```
+    * or for conditional logic, use `GO TO 0100-EXIT`. 
+    ```cobol
+    *>SAMPLE CONDITION ONLY
+    IF CONDITION = 1
+        GO TO 0100-EXIT
+    END-IF.
+    ```
 * Replicate Easytrieve `IF` logic exactly in the `PROCEDURE DIVISION`.
 
 
 5. **Safe Syntax (Write & Spaces):**
 * **FORBIDDEN:** Do **NOT** use `WRITE ... FROM SPACES`. This causes "Severe" errors on strict Mainframe compilers.
 * **MANDATORY:** Declare a variable in `WORKING-STORAGE` (e.g., `01 WS-BLANK-LINE PIC X(132) VALUE SPACES.`) that matches your FD size, and write from that variable instead.
-* **IMPORTANT:** Do **NOT** use **double quotations marks** **(" ")** as it will be detected as error in mainframe environment.
+* **IMPORTANT:** Use single quotes (`' '`) instead of **double quotation marks** (**" "**). Most mainframe environments are configured with the `APOST` compiler option, making double quotes an error.
 
 
 6. **Debugging & Visibility:**
@@ -123,30 +127,69 @@ END-IF.
 9. **Paragraph Generation:**
 * Break logic into small, modular `PERFORM` paragraphs. Do not create monolithic paragraphs.
 
-10. **Looping Logic:**
-* When reading files in a loop, use the following pattern to check for end-of-file:
+10. **Looping Logic (The Priming Read):**
+* You must never read a file after reaching the end.
+* Use the "Priming Read" pattern to ensure safe file processing.
+* Perform an initial read before the loop starts.
+* Perform the next read at the exact bottom of your process loop.
+
 ```cobol
-           IF WS-EOF-FILENAME = 'Y'
-              READ FILE-NAME
-              AT END
-                 MOVE "Y" TO WS-EOF-FILENAME
-              END-READ
-           END-IF.
+       0000-MAIN.
+           OPEN INPUT FILE-NAME.
+           
+           *> 1. The Priming Read
+           PERFORM 1100-READ-FILE THRU 1100-EXIT.
+           
+           *> 2. The Loop (Checks EOF before processing)
+           PERFORM 2000-PROCESS-RECORD THRU 2000-EXIT
+               UNTIL WS-EOF-FILENAME = 'Y'.
+               
+           CLOSE FILE-NAME.
+           STOP RUN.
+
+       2000-PROCESS-RECORD.
+           *> 3. Process the guaranteed valid record
+           PERFORM 3000-BUSINESS-LOGIC THRU 3000-EXIT.
+           
+           *> 4. Read the next record at the very end
+           PERFORM 1100-READ-FILE THRU 1100-EXIT.
+       2000-EXIT.
+           EXIT.
+           
+       1100-READ-FILE.
+           READ FILE-NAME
+               AT END
+                   MOVE 'Y' TO WS-EOF-FILENAME
+           END-READ.
+       1100-EXIT.
+           EXIT.
 ```
 
-11. **VSAM Lookup Logic Pattern:**  
-* When a lookup file is identified (e.g., a file with 'LKP' in the JCL), it's accessed via a `CALL` to a dedicated lookup program (e.g., `IMLKPMV`), not through a standard `READ`.
-* **Naming Assumptions:** If you are unsure about the exact name of the file to be `COPY`ed or `CALL`ed, assume a logical name based on project conventions (e.g., `STWSLU`, `STLKPMV`) and include a COBOL comment stating that it is an assumed name.
-* **Copybooks:** Ensure the relevant lookup and control copybooks (e.g., `STWSLU`, `SIWSCNTL`) are included in `WORKING-STORAGE` to provide the necessary data structures (`I-O-CONTROL-AREA`, `STWS-LOOKUP-RECORD`).
-* **Parameter Setup:** Create a dedicated paragraph to set up the lookup parameters before the call.
-    1.  Initialize the lookup key fields (`IM-LKUP-KEY`, `IM-LKUP-CTL*`).
-    2.  Move the value to be searched for into `IM-LKUP-VALUE`.
-    3.  Set the access mode: `MOVE 'I' TO I-O-CONTROL-ACCESS`.
-    4.  Set the operation type: `MOVE 'K' TO I-O-CONTROL-OPERATOR` for keyed reads.
-* **Execution and Result Handling:**
-    *   Use the `CALL` statement: `CALL 'IMLKPMV' USING I-O-CONTROL-AREA, IMWS-LOOKUP-RECORD.`
-    *   Check the result immediately using the `I-O-88-NOT-FOUND` condition.
-    *   If the lookup is successful, the result will be in a field like `IM-LKUP-NAME`.
+11. **VSAM Lookup Business Pattern:**  
+* When a lookup file is identified (e.g., a file with 'LKP' in the JCL), follow this specific execution sequence:
+    1.  Initialize parameters (Clear data areas).
+    2.  Populate lookup key fields (`IM-LKUP-KEY`, `IM-LKUP-CTL*`).
+    3.  Set Access Mode (`I`) and Operator (`K` for Keyed).
+    4.  Execute the `CALL` to the lookup program.
+    5.  Check the result immediately using the `I-O-88-NOT-FOUND` condition.
+
+12. **COPY Statement Rules (Mainframe Standards):**
+* **Member Names:** All copybook member names must be **8 characters or fewer** to adhere to z/OS PDS member naming limits.
+* **Naming Assumptions:** If the exact copybook name is unknown, use a logical assumed name (e.g., `STWSLU`, `SIWSCNTL`) and include a comment noting it is assumed.
+* **Usage:** Use `COPY` statements for all shared record layouts, control areas, and constant tables. 
+* **Placement:** `COPY` statements should typically begin in **Area B** (Column 12 or later).
+* **Standard Includes:** Ensure `SIWSCNTL` (I/O Control) and `IMAWKMST` (Master Layout) are included when performing file-related operations.
+
+13. **CALL Statement Rules (Mainframe Standards):**
+* **Program Names:** External subroutine names must not exceed **8 characters**.
+* **Call Type:** 
+    * Use `CALL 'LITERAL'` for subroutines that will be statically linked.
+    * Use `CALL data-name` for subroutines that require dynamic loading at runtime.
+* **Parameter Setup:** 
+    * Data is passed **BY REFERENCE** by default in z/OS COBOL. 
+    * Always include the `I-O-CONTROL-AREA` as the first parameter when calling standard project I/O modules (e.g., `CALL 'IMACTM' USING I-O-CONTROL-AREA, ...`).
+* **Return Code Handling:** You **MUST** check the return status immediately after every `CALL`. Use the 88-level status codes defined in `SIWSCNTL` (e.g., `I-O-88-NORMAL-RET`, `I-O-88-END-OF-FILE`).
+* **Subroutine Lifecycle:** Always perform a "Close" call (Operator 'E') for all subroutines in the `0900-TERMINATION` paragraph before the program ends.
 
 *   **Example Pattern:**
 ```cobol
