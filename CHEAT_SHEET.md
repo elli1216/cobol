@@ -1,161 +1,169 @@
 # COBOL File Definitions: Fixed (FB) vs. Variable (VB)
-
-**Context:** Migrating Easytrieve (`.ezt`) file definitions to IBM Enterprise COBOL.
+**Cheat Sheet for Easytrieve → IBM Enterprise COBOL / GnuCOBOL Migration**  
+**Version:** 1.1 (March 2026)  
+**Target:** Land Bank of the Philippines / Philippine Government Mainframe Standards
 
 ---
 
 ## Quick Comparison
 
-| Feature | **FB (Fixed Block)** | **VB (Variable Block)** |
-| :--- | :--- | :--- |
-| **Analogy** | A wall of identical bricks. | A mailbag of different-sized letters. |
-| **Structure** | Every record has the **exact same length**. Short records are padded with spaces. | Records vary in length to save space. Contains a hidden 4-byte descriptor (RDW). |
-| **COBOL Mode** | `RECORDING MODE IS F` | `RECORDING MODE IS V` |
-| **Efficiency** | Faster processing (predictable). | Saves disk space (no padding). |
+| Feature          | **FB (Fixed Block)**                          | **VB (Variable Block)**                          |
+|------------------|-----------------------------------------------|--------------------------------------------------|
+| **Analogy**      | A wall of identical bricks                    | A mailbag of different-sized letters             |
+| **Structure**    | Every record = **exact same length**          | Records vary (RDW handled by OS)                 |
+| **COBOL Mode**   | `RECORDING MODE IS F`                         | `RECORDING MODE IS V`                            |
+| **Efficiency**   | Faster I/O (predictable)                      | Saves DASD space (no padding)                    |
+| **EZT Syntax**   | `FILE xxx FB(80 800)`                         | `FILE xxx VB(18054 27998)`                       |
 
 ---
 
 ## How to Identify in Easytrieve
 
-Look at the `FILE` statement in your `.ezt` source code.
-
-### 1. Fixed Block (FB)
-
 ```easytrieve
-FILE MYFILE FB(80 800)
+FILE MYFILE FB(80 800)          *> Fixed Block
+FILE STACTMI VB(18054 27998)    *> Variable Block
+FILE VSAMFILE VS                *> VSAM (never use RECORDING MODE)
 ```
-
-- **FB**: Explicitly states "Fixed Block".
-- **80**: The Record Length (Size of `01` level).
-- **800**: The Block Size (Ignore this in COBOL, use `0`).
-
-### 2. Variable Block (VB)
-
-```easytrieve
-FILE STACTMI VB(18054 27998)
-```
-
-- **VB**: Explicitly states "Variable Block".
-- **18054**: The **Maximum** Record Length.
-- **27998**: The Block Size.
 
 ---
 
 ## COBOL Implementation Guide
 
-The difference is entirely in the **FD (File Description)**. The `PROCEDURE DIVISION` logic (`READ`/`WRITE`) remains mostly the same.
-
-### Scenario A: Fixed Block (FB) Implementation
-
-**Rule:** Definition must match the exact byte size.
-
+### Scenario A: Fixed Block (FB)
 ```cobol
        FD  INPUT-FILE
-           RECORDING MODE IS F         *> "Fixed"
-           LABEL RECORDS ARE STANDARD
-           BLOCK CONTAINS 0 RECORDS    *> Let system handle block size
-           RECORD CONTAINS 80 CHARACTERS.   
-       01  INPUT-REC      PIC X(80).   *> EXACT size match (e.g., 80)
-```
-
-### Scenario B: Variable Block (VB) Implementation
-
-**Rule:** Definition must match the **Maximum** possible size.
-
-```cobol
-       FD  STACTMI-FILE
-           RECORDING MODE IS V         *> "Variable"
+           RECORDING MODE IS F
            LABEL RECORDS ARE STANDARD
            BLOCK CONTAINS 0 RECORDS
-           RECORD IS VARYING IN SIZE FROM 1 TO 18050. *> Subtract 4 bytes of max length
-       01  STACTMI-REC.
-           05  REC-DATA   PIC X(18054). *> MAX size from EZT
+           RECORD CONTAINS 80 CHARACTERS
+           DATA RECORDS ARE INPUT-REC.
+       01  INPUT-REC                      PIC X(80).
 ```
 
-> [!IMPORTANT]
-> **Mainframe Note:** In Mainframe COBOL, do **NOT** manually define the 4-byte RDW (Record Descriptor Word) at the start of the record. The operating system handles it invisibly. Just define the data payload.
+### Scenario B: Variable Block (VB)
+```cobol
+       FD  STACTMI-FILE
+           RECORDING MODE IS V
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD IS VARYING IN SIZE FROM 1 TO 18054
+               DEPENDING ON WS-REC-LEN
+           DATA RECORDS ARE STACTMI-REC.
+
+       01  STACTMI-REC                    PIC X(18054).
+       01  WS-REC-LEN                     PIC S9(4) COMP.   *> WORKING-STORAGE
+```
+
+### Scenario C: VSAM (Most Common in Banks)
+```cobol
+       SELECT VSAM-FILE ASSIGN TO STBCRM
+           ORGANIZATION IS INDEXED
+           ACCESS MODE IS SEQUENTIAL          *> or DYNAMIC
+           RECORD KEY IS BC1-CTL-KEY
+           FILE STATUS IS WS-VSAM-STATUS.
+
+       FD  VSAM-FILE
+           RECORD CONTAINS 1700 CHARACTERS
+           DATA RECORDS ARE ST-BCR-1.
+       COPY STWSBCB1.                         *> shop standard
+```
+
+> [!IMPORTANT]  
+> **Never** put `RECORDING MODE` on VSAM files.  
+> **Never** define lookup files (`*LKP*` in JCL) in `FILE-CONTROL` — use `CALL` only.
 
 ---
 
-## Troubleshooting Common Errors
+## Expanded Troubleshooting Table (All Common Migration Errors)
 
-| Error Code | Meaning | Cause | Fix |
-| :--- | :--- | :--- | :--- |
-| **Abend S013** | Record Length Mismatch | Defined `FD ... PIC X(80)` but file is length 100. | Match your COBOL `FD` to dataset attributes. |
-| **Status 39** | Attribute Mismatch | Used `RECORDING MODE F` for a Variable file. | Check EZT; if `VB`, use `RECORDING MODE V`. |
-| **IGYDS1089-S** | Syntax Error | `RECORDING MODE` was placed inside `SELECT`. | Move `RECORDING MODE` to the `FD` section. |
-| **IGYPS0086-I** | EXIT PARAGRAPH Trap | `EXIT PARAGRAPH` is not a valid COBOL command. | Use the `GO TO [Label]-EXIT` pattern. |
-| **Severe Error** | Invalid WRITE FROM SPACES | `WRITE ... FROM SPACES` literal used. | Use a variable (e.g., `WS-BLANK-LINE`). |
-| **ERROR_TOKEN** | Missing Period | Previous line is missing a period (`.`). | Add `.` to the end of the previous line. |
+| Error / Abend          | Meaning                                      | Typical EZT → COBOL Cause                              | Fix |
+|------------------------|----------------------------------------------|--------------------------------------------------------|-----|
+| **S013**               | Record length mismatch                       | FD size ≠ actual dataset LRECL                         | Match `RECORD CONTAINS` exactly to EZT layout |
+| **Status 35**          | File not found / Open failed                 | Wrong DDNAME in JCL or missing dataset                 | Verify JCL `//DDNAME DD DSN=...` |
+| **Status 39**          | Attribute mismatch                           | `RECORDING MODE F` on a VB file                        | Use `V` for VB files |
+| **Status 23**          | Record not found (VSAM)                      | Random READ without START or wrong key                 | Use `START` + `READ NEXT` or check key |
+| **Status 97**          | VSAM file not closed properly last run       | Previous job abended                                   | Run `IDCAMS VERIFY` on the cluster |
+| **Status 71**          | (GnuCOBOL/PC only) Nulls in record           | Uninitialized fields from EZT                          | `MOVE SPACES TO REC` + `INSPECT ... REPLACING ALL X'00' BY SPACES` |
+| **IGYDS1089-S**        | RECORDING MODE in wrong place                | Put `RECORDING MODE` in `SELECT` instead of `FD`       | Move to FD |
+| **IGYPS0086-I**        | EXIT PARAGRAPH used                          | Copied old code                                        | Use `GO TO xxx-EXIT` pattern |
+| **Severe Error**       | `WRITE ... FROM SPACES`                      | Literal SPACES not allowed                             | Use `01 WS-BLANK-LINE PIC X(132) VALUE SPACES` |
+| **ERROR_TOKEN**        | Missing period (.)                           | Previous line has no `.`                               | Add period to line above |
+| **IGYPAxxxx**          | COPY book not found                          | Member name > 8 chars or wrong PDS                     | Use 8-char name (e.g. `STWSBCB1`) |
+| **SOC4 / Protection**  | Data exception / subscript out of range      | Uninitialized fields or OCCURS without index init      | `MOVE SPACES TO ALL` in initialization |
+| **Double-quote error** | Invalid character (")                        | Used `" "` with `APOST` compiler option                | Change all to single quotes `' '` |
+| **IGYSC1088**          | Continuation error                           | Literal split without `-` in column 7                 | Use `-` in col 7 for continuation |
+| **No FILE STATUS**     | Silent I/O failures                          | Forgot to declare/check FILE STATUS                    | Always declare + check after every I/O |
 
 ---
 
 ## Common Logic & Syntax Fixes
 
-### 1. The "EXIT PARAGRAPH" Trap
-The mainframe ignores `EXIT PARAGRAPH`, causing code to "fall through."
-
+### 1. EXIT PARAGRAPH Trap (Most Common Copy-Paste Error)
 ```cobol
-*> WRONG
+*> WRONG (falls through!)
 IF ERROR-FOUND
-   EXIT PARAGRAPH.  *> Computer ignores this!
+   EXIT PARAGRAPH.
 END-IF.
 
 *> CORRECT
 IF ERROR-FOUND
-   GO TO 2100-EXIT. *> Jumps to the end
+   GO TO 2100-EXIT.
 END-IF.
 ...
 2100-EXIT.
    EXIT.
 ```
 
-### 2. Writing Spaces Properly
-The compiler needs a defined variable to know how many spaces to write.
-
-IN WORKING-STORAGE IF FILE IS **FD**:
+### 2. Writing Blank Lines (FB vs VB)
 ```cobol
-FILE SECTION.
-       FD  REPORT-FILE
-           RECORDING MODE IS F
-           BLOCK CONTAINS 0 RECORDS.
-                               *> Size is 132
-       01  RPT-REC             PIC X(132). 
+*> For 132-column report (FB)
+01  WS-BLANK-LINE              PIC X(132) VALUE SPACES.
 
-WORKING-STORAGE SECTION.
-                               *> MATCH EXACTLY:
-       01  WS-BLANK-LINE       PIC X(132) VALUE SPACES.
+WRITE RPT-REC FROM WS-BLANK-LINE AFTER ADVANCING 1 LINE.
 
-*> IN PROCEDURE:
-WRITE PRT-REC FROM WS-BLANK-LINE AFTER ADVANCING 1 LINE.
+*> For VB file
+01  WS-BLANK-VB                PIC X(18054) VALUE SPACES.   *> or just PIC X(1)
 ```
+
+### 3. Missing Periods = Silent Killer
+Always check the **line above** the compiler error.
+
+### 4. VSAM via Standard CALL (STBCRM / IMLKPMV pattern)
+```cobol
+       1100-READ-STBCRM.
+           MOVE 'R' TO I-O-CONTROL-OPERATOR.
+           MOVE 'I' TO I-O-CONTROL-ACCESS.
+           CALL 'STBCRM' USING I-O-CONTROL-AREA,
+                               ST-BCR-1.
+
+           IF I-O-88-END-OF-FILE
+              MOVE 'Y' TO WS-EOF
+           ELSE IF NOT I-O-88-NORMAL-RET
+              DISPLAY 'STBCRM ERROR ' I-O-RETURN-CODE
+              MOVE 'Y' TO WS-EOF
+           END-IF.
+```
+
+### 5. Priming Read (EZT JOB INPUT equivalent)
+```cobol
+       0000-MAIN.
+           PERFORM 1000-INITIALIZATION THRU 1000-EXIT.
+           PERFORM 2000-PROCESS THRU 2000-EXIT
+               UNTIL WS-EOF = 'Y'.
+           PERFORM 9000-TERMINATION THRU 9000-EXIT.
+           STOP RUN.
+```
+
 ---
-IN WORKING-STORAGE IF FILE IS **VB**:
-```cobol
-FILE SECTION.
-       FD  DATA-FILE
-           RECORDING MODE IS V
-           BLOCK CONTAINS 0 RECORDS.
-       01  DATA-REC            PIC X(18054). <-- Max Size
 
-WORKING-STORAGE SECTION.
-                               *> MATCH MAX/JUST ONE SPACE
-       01  WS-BLANK-LINE       PIC X(18054 or 1) VALUE SPACES.
+## Best Practices Checklist (Tick before Compile)
 
-*> IN PROCEDURE:
-WRITE PRT-REC FROM WS-BLANK-LINE AFTER ADVANCING 1 LINE.
-```
-
-### 3. Missing Periods (The "Run-on Sentence")
-Always check the line **above** the error for a missing period.
-
-```cobol
-*> WRONG
-05 FILLER PIC X(10) VALUE 'ACCOUNT'   <-- Missing dot!
-05 FILLER PIC X(10) VALUE 'NUMBER'.
-
-*> CORRECT
-05 FILLER PIC X(10) VALUE 'ACCOUNT'.  <-- Added dot
-05 FILLER PIC X(10) VALUE 'NUMBER'.
-```
-
+- [ ] All files explicitly `OPEN` and `CLOSE`
+- [ ] Lookup files (`*LKP*`) handled only via `CALL`
+- [ ] Single quotes everywhere
+- [ ] `WS-BLANK-LINE` for every report
+- [ ] Priming Read pattern used
+- [ ] `PERFORM xxx THRU xxx-EXIT` everywhere
+- [ ] Column 72 limit respected
+- [ ] `FILE STATUS` declared and checked after every I/O
+- [ ] `STOP RUN` only in `0000-MAIN`
