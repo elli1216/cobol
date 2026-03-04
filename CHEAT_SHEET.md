@@ -91,6 +91,7 @@ FILE VSAMFILE VS                *> VSAM (never use RECORDING MODE)
 | **IGYPAxxxx**          | COPY book not found                          | Member name > 8 chars or wrong PDS                     | Use 8-char name (e.g. `STWSBCB1`) |
 | **SOC4 / Protection**  | Data exception / subscript out of range      | Uninitialized fields or OCCURS without index init      | `MOVE SPACES TO ALL` in initialization |
 | **Double-quote error** | Invalid character (")                        | Used `" "` with `APOST` compiler option                | Change all to single quotes `' '` |
+| **IGZ0037S**          | The flow of control in program program-name proceeded beyond the last line of the program.  | The program did not have a terminator (STOP, GOBACK, or EXIT), and control fell through the last instruction.  | The last paragraph in the program was executed as the result of a “fall-through” path, and there was no statement at the end of the paragraph to end the program. |
 | **IGYSC1088**          | Continuation error                           | Literal split without `-` in column 7                 | Use `-` in col 7 for continuation |
 | **No FILE STATUS**     | Silent I/O failures                          | Forgot to declare/check FILE STATUS                    | Always declare + check after every I/O |
 
