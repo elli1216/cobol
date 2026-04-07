@@ -65,7 +65,6 @@ FILE VSAMFILE VS                *> VSAM (never use RECORDING MODE)
        FD  VSAM-FILE
            RECORD CONTAINS 1700 CHARACTERS
            DATA RECORDS ARE ST-BCR-1.
-       COPY STWSBCB1.                         *> shop standard
 ```
 
 > [!IMPORTANT]  
@@ -129,23 +128,7 @@ WRITE RPT-REC FROM WS-BLANK-LINE AFTER ADVANCING 1 LINE.
 ### 3. Missing Periods = Silent Killer
 Always check the **line above** the compiler error.
 
-### 4. VSAM via Standard CALL (STBCRM / IMLKPMV pattern)
-```cobol
-       1100-READ-STBCRM.
-           MOVE 'R' TO I-O-CONTROL-OPERATOR.
-           MOVE 'I' TO I-O-CONTROL-ACCESS.
-           CALL 'STBCRM' USING I-O-CONTROL-AREA,
-                               ST-BCR-1.
-
-           IF I-O-88-END-OF-FILE
-              MOVE 'Y' TO WS-EOF
-           ELSE IF NOT I-O-88-NORMAL-RET
-              DISPLAY 'STBCRM ERROR ' I-O-RETURN-CODE
-              MOVE 'Y' TO WS-EOF
-           END-IF.
-```
-
-### 5. Priming Read (EZT JOB INPUT equivalent)
+### 4. Priming Read (EZT JOB INPUT equivalent)
 ```cobol
        0000-MAIN.
            PERFORM 1000-INITIALIZATION THRU 1000-EXIT.
