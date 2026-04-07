@@ -1,7 +1,6 @@
 # COBOL File Definitions: Fixed (FB) vs. Variable (VB)
 **Cheat Sheet for Easytrieve → IBM Enterprise COBOL / GnuCOBOL Migration**  
 **Version:** 1.1 (March 2026)  
-**Target:** Land Bank of the Philippines / Philippine Government Mainframe Standards
 
 ---
 
